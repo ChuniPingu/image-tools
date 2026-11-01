@@ -265,6 +265,45 @@ void first_page(const Workspace& workspace) {
     check(last[0] >= 250 && last[2] == 0, "Read only first TIFF page");
 }
 
+
+void literal_input_paths(const Workspace& workspace) {
+    auto pages = rgba({
+        255,0,0,255, 255,0,0,255,
+        255,0,0,255, 255,0,0,255,
+        0,0,255,255, 0,0,255,255,
+        0,0,255,255, 0,0,255,255
+    }, 2, 4);
+    const auto base = workspace.root / "literal-base.tif";
+    const auto base_name = image_tools::path_to_utf8(base);
+    check_vips(vips_tiffsave(pages.get(), base_name.c_str(), "page_height", 2, nullptr),
+        "Save literal-path fixture");
+    const auto alias = image_tools::path_from_utf8(base_name + "[n=-1]");
+    check(!std::filesystem::exists(alias), "Option-like input path does not exist");
+    throws([&] { image_tools::validate(alias); }, "Missing literal path must not become loader options");
+    throws([&] {
+        auto result = image_tools::resize(alias, 4, 4, true);
+        static_cast<void>(pixels(result.get()));
+    }, "Resize must reject a missing literal path");
+
+    for (const auto* name : {"actual[n=-1].tif", "真实 image.tif[n=-1]", "empty-options.tif[]"}) {
+        const auto literal = workspace.root / image_tools::path_from_utf8(name);
+        std::filesystem::copy_file(base, literal);
+        image_tools::validate(literal);
+        auto resized = image_tools::resize(literal, 4, 4, true);
+        const auto last = pixel(pixels(resized.get()), 4, 2, 3);
+        check(last[0] >= 250 && last[2] == 0, "Bracketed literal path keeps first-page semantics");
+    }
+
+    auto green = solid({0, 255, 0, 255});
+    const auto green_path = png(workspace, "literal-green.png", green.get());
+    std::filesystem::copy_file(green_path, alias);
+    image_tools::validate(alias);
+    auto exact_file = image_tools::resize(alias, 4, 4, true);
+    const auto value = pixel(pixels(exact_file.get()), 4, 2, 2);
+    check(value[0] == 0 && value[1] >= 250 && value[2] == 0,
+        "Literal file content wins over an existing base filename");
+}
+
 void orientation(const Workspace& workspace) {
     auto image = rgba({255,0,0,255, 0,0,255,255}, 2, 1);
     vips_image_set_int(image.get(), VIPS_META_ORIENTATION, 6);
@@ -311,6 +350,7 @@ int main() {
             {"effect atlas", [&] { atlas(workspace); }},
             {"16-bit grayscale", [&] { grayscale(workspace); }},
             {"first TIFF page", [&] { first_page(workspace); }},
+            {"literal input paths", [&] { literal_input_paths(workspace); }},
             {"EXIF orientation", [&] { orientation(workspace); }},
             {"embedded ICC profile", [&] { embedded_profile(workspace); }}
         };

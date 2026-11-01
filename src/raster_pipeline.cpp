@@ -84,17 +84,22 @@ Image load(const std::filesystem::path& source) {
         throw std::invalid_argument("Input path must not be empty.");
     }
     const auto filename = path_to_utf8(source);
-    const char* loader = vips_foreign_find_load(filename.c_str());
+    // An empty option block keeps a literal trailing [text] in the filename.
+    const auto discovery_name = filename + "[]";
+    const char* loader = vips_foreign_find_load(discovery_name.c_str());
     if (loader == nullptr) {
         fail_vips("Unsupported or invalid raster image");
     }
     if (!is_raster_loader(loader)) {
         throw std::runtime_error("Unsupported raster image loader: " + std::string(loader));
     }
+    // Direct dispatch avoids parsing the literal path as options a second time.
     // File loaders default to the first page/frame. Never request all pages (n=-1).
-    return own_image(vips_image_new_from_file(filename.c_str(),
-        "access", VIPS_ACCESS_SEQUENTIAL, "fail_on", VIPS_FAIL_ON_WARNING,
-        "revalidate", TRUE, nullptr), "Load raster image");
+    return operate("Load raster image", [&](VipsImage** out) {
+        return vips_call(loader, filename.c_str(), out,
+            "access", VIPS_ACCESS_SEQUENTIAL, "fail_on", VIPS_FAIL_ON_WARNING,
+            "revalidate", TRUE, nullptr);
+    });
 }
 
 class ExclusiveOutput final {
