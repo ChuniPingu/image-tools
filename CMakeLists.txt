@@ -61,6 +61,7 @@ install(FILES LICENSE THIRD-PARTY-NOTICES.md build-manifest.json DESTINATION .)
 install(FILES "${VIPS_SDK_ROOT}/LICENSE" DESTINATION licenses RENAME libvips-LICENSE.txt)
 install(FILES licenses/GPL-3.0.txt licenses/LGPL-3.0.txt
     licenses/libvips-THIRD-PARTY-NOTICES.md DESTINATION licenses)
+install(DIRECTORY licenses/dependencies DESTINATION licenses)
 install(FILES "${VIPS_SDK_ROOT}/versions.json" DESTINATION . RENAME dependency-versions.json)
 install(FILES "${CMAKE_BINARY_DIR}/build-metadata.json" DESTINATION .)
 set(CPACK_GENERATOR ZIP)

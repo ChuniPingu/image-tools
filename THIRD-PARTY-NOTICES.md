@@ -24,3 +24,11 @@ source license.
 The original GNU license texts are available from
 https://www.gnu.org/licenses/lgpl-3.0.txt and
 https://www.gnu.org/licenses/gpl-3.0.txt.
+
+Component copyright and license texts are included in [licenses/dependencies](licenses/dependencies).
+The source URLs and file checksums are recorded in [SOURCES.json](licenses/dependencies/SOURCES.json).
+
+This software is based in part on the work of the Independent JPEG Group.
+
+This distribution includes FreeType font rendering components.
+This product includes Gain Map technology under license by Adobe.
