@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "name": "image-tools",
+  "version": "@PROJECT_VERSION@",
+  "sourceCommit": "@IMAGE_TOOLS_COMMIT@",
+  "platform": "win-x64",
+  "compiler": "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@",
+  "libvipsVersion": "@VIPS_VERSION@",
+  "libvipsSdkUrl": "@VIPS_SDK_URL@",
+  "libvipsSdkSha256": "@VIPS_SDK_SHA256@",
+  "libvipsSource": "@VIPS_SOURCE_URL@",
+  "localSdkOverride": @VIPS_SDK_OVERRIDE@
+}

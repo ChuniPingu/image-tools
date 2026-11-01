@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "name": "image-tools",
+  "version": "0.1.0",
+  "protocolVersion": 1,
+  "platform": "win-x64",
+  "libvips": {
+    "version": "8.18.7",
+    "variant": "web-static",
+    "url": "https://github.com/libvips/build-win64-mxe/releases/download/v8.18.7/vips-dev-x64-web-8.18.7-static.zip",
+    "sha256": "a736af61d3b46499760efa606e469cb14e060445b1f6fd36a1fa2e75009e1197",
+    "source": "https://github.com/libvips/build-win64-mxe/tree/v8.18.7",
+    "noticesSource": "https://github.com/kleisauke/libvips-packaging/blob/73e9bd207e046e8b8d60ce5a9cae8d2e649b1573/THIRD-PARTY-NOTICES.md"
+  }
+}
