@@ -334,6 +334,83 @@ void embedded_profile(const Workspace& workspace) {
         && value[2] >= 218 && value[2] <= 222, "Convert embedded ICC profile into sRGB");
 }
 
+void set_png_gamma(const Path& path, std::uint32_t gamma) {
+    auto bytes = read(path);
+    const auto append_u32 = [](std::vector<unsigned char>& target, std::uint32_t value) {
+        for (const int shift : {24, 16, 8, 0}) {
+            target.push_back(static_cast<unsigned char>(value >> shift));
+        }
+    };
+    std::vector<unsigned char> chunk;
+    append_u32(chunk, 4);
+    chunk.insert(chunk.end(), {'g', 'A', 'M', 'A'});
+    append_u32(chunk, gamma);
+    std::uint32_t crc = 0xffffffff;
+    for (std::size_t i = 4; i < chunk.size(); ++i) {
+        crc ^= chunk[i];
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320u : 0u);
+        }
+    }
+    append_u32(chunk, crc ^ 0xffffffff);
+    // libvips' fixture writer emits no gAMA or sRGB chunk. Insert before IDAT.
+    bytes.insert(bytes.begin() + 33, chunk.begin(), chunk.end());
+    write(path, bytes);
+}
+
+void standalone_png_gamma(const Workspace& workspace) {
+    auto image = solid({128, 128, 128, 128});
+    for (const auto [gamma, expected] : {std::pair{100000u, 188}, std::pair{60000u, 153}}) {
+        const auto source = png(workspace, "gamma.png", image.get());
+        set_png_gamma(source, gamma);
+        auto converted = image_tools::convert(source);
+        auto resized = image_tools::resize(source, 7, 5, false);
+        for (auto* result : {converted.get(), resized.get()}) {
+            const auto value = pixel(pixels(result), vips_image_get_width(result), 0, 0);
+            check(value[0] >= expected - 1 && value[0] <= expected + 1
+                && value[0] == value[1] && value[1] == value[2] && value[3] == 128,
+                "Decode standalone PNG gamma without applying it to alpha");
+        }
+    }
+
+    const std::array<std::uint16_t, 4> values{32768,32768,32768,32768};
+    Image raw(vips_image_new_from_memory_copy(values.data(), sizeof(values), 2, 2, 1, VIPS_FORMAT_USHORT));
+    VipsImage* tagged = nullptr;
+    check_vips(vips_copy(raw.get(), &tagged, "interpretation", VIPS_INTERPRETATION_GREY16, nullptr), "Tag linear gray");
+    Image gray(tagged);
+    const auto source = png(workspace, "gamma-gray16.png", gray.get());
+    set_png_gamma(source, 100000);
+    auto converted = image_tools::convert(source);
+    const auto value = pixel(pixels(converted.get()), 2, 0, 0);
+    check(value == std::array<unsigned char,4>{188,188,188,255}, "Decode 16-bit gray gamma");
+}
+
+void low_alpha(const Workspace& workspace) {
+    for (const auto alpha : std::array<unsigned char, 5>{1, 2, 3, 128, 255}) {
+        auto image = solid({255, 0, 0, alpha});
+        const auto source = png(workspace, "low-alpha.png", image.get());
+        for (const int size : {2, 7}) {
+            auto result = image_tools::resize(source, size, size, false);
+            const auto value = pixel(pixels(result.get()), size, 0, 0);
+            check(value == std::array<unsigned char,4>{255,0,0,alpha},
+                "Preserve nonzero alpha colors with and without resizing");
+        }
+    }
+}
+
+void raster_conversion(const Workspace& workspace) {
+    auto image = rgba({255,0,0,1, 0,0,255,2}, 2, 1);
+    vips_image_set_int(image.get(), VIPS_META_ORIENTATION, 6);
+    const auto source = workspace.root / "convert-oriented.tif";
+    const auto name = image_tools::path_to_utf8(source);
+    check_vips(vips_tiffsave(image.get(), name.c_str(), nullptr), "Save conversion fixture");
+    auto result = image_tools::convert(source);
+    check(vips_image_get_width(result.get()) == 1 && vips_image_get_height(result.get()) == 2,
+        "Conversion preserves oriented dimensions");
+    check(pixels(result.get()) == std::vector<unsigned char>{255,0,0,1, 0,0,255,2},
+        "Conversion preserves straight alpha");
+}
+
 } // namespace
 
 int main() {
@@ -352,7 +429,10 @@ int main() {
             {"first TIFF page", [&] { first_page(workspace); }},
             {"literal input paths", [&] { literal_input_paths(workspace); }},
             {"EXIF orientation", [&] { orientation(workspace); }},
-            {"embedded ICC profile", [&] { embedded_profile(workspace); }}
+            {"embedded ICC profile", [&] { embedded_profile(workspace); }},
+            {"standalone PNG gamma", [&] { standalone_png_gamma(workspace); }},
+            {"low alpha colors", [&] { low_alpha(workspace); }},
+            {"raster conversion", [&] { raster_conversion(workspace); }}
         };
         for (const auto& [name, test] : tests) {
             try {

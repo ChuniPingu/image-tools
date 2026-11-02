@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <system_error>
@@ -99,6 +100,117 @@ Image load(const std::filesystem::path& source) {
         return vips_call(loader, filename.c_str(), out,
             "access", VIPS_ACCESS_SEQUENTIAL, "fail_on", VIPS_FAIL_ON_WARNING,
             "revalidate", TRUE, nullptr);
+    });
+}
+
+std::optional<double> png_gamma(const std::filesystem::path& source) {
+    std::ifstream input(source, std::ios::binary);
+    std::array<unsigned char, 8> header{};
+    constexpr std::array<unsigned char, 8> signature{137, 80, 78, 71, 13, 10, 26, 10};
+    if (!input.read(reinterpret_cast<char*>(header.data()), header.size()) || header != signature) {
+        return std::nullopt;
+    }
+    const auto u32 = [](const unsigned char* p) {
+        return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16)
+            | (std::uint32_t(p[2]) << 8) | std::uint32_t(p[3]);
+    };
+    std::optional<double> gamma;
+    // PNG color-space chunks precede IDAT. Skip payloads without buffering the image.
+    // libvips still validates and decodes the original file, including its CRCs.
+    while (input.read(reinterpret_cast<char*>(header.data()), header.size())) {
+        const auto length = u32(header.data());
+        const std::string_view type(reinterpret_cast<const char*>(header.data() + 4), 4);
+        if (type == "sRGB" || type == "iCCP") {
+            return std::nullopt;
+        }
+        if (type == "IDAT" || type == "IEND") {
+            break;
+        }
+        if (type == "gAMA" && length == 4) {
+            std::array<unsigned char, 4> value{};
+            if (!input.read(reinterpret_cast<char*>(value.data()), value.size())) {
+                break;
+            }
+            if (const auto encoded = u32(value.data()); encoded != 0) {
+                gamma = static_cast<double>(encoded) / 100000.0;
+            }
+            input.seekg(4, std::ios::cur); // CRC
+        } else {
+            input.seekg(static_cast<std::streamoff>(length) + 4, std::ios::cur);
+        }
+    }
+    return gamma;
+}
+
+Image oriented_image(const std::filesystem::path& source) {
+    auto loaded = load(source);
+    return operate("Apply image orientation", [&](VipsImage** out) {
+        return vips_autorot(loaded.get(), out, nullptr);
+    });
+}
+
+Image linear_image(VipsImage* oriented, const std::filesystem::path& source) {
+    if (vips_image_get_typeof(oriented, VIPS_META_ICC_NAME) == 0) {
+        if (const auto gamma = png_gamma(source)) {
+            // Expand gray/palette inputs without reducing 16-bit PNG precision.
+            const bool sixteen_bit = vips_image_get_format(oriented) == VIPS_FORMAT_USHORT;
+            const auto interpretation = sixteen_bit ? VIPS_INTERPRETATION_RGB16 : VIPS_INTERPRETATION_sRGB;
+            const double maximum = sixteen_bit ? 65535.0 : 255.0;
+            auto rgb = operate("Expand PNG channels", [&](VipsImage** out) {
+                return vips_colourspace(oriented, out, interpretation, nullptr);
+            });
+            auto colors = operate("Read PNG colors", [&](VipsImage** out) {
+                return vips_extract_band(rgb.get(), out, 0, "n", 3, nullptr);
+            });
+            auto normalized = operate("Normalize PNG colors", [&](VipsImage** out) {
+                return vips_linear1(colors.get(), out, 1.0 / maximum, 0.0, nullptr);
+            });
+            auto linear = operate("Decode PNG gamma", [&](VipsImage** out) {
+                return vips_pow_const1(normalized.get(), out, 1.0 / *gamma, nullptr);
+            });
+            Image rgba;
+            if (vips_image_hasalpha(rgb.get())) {
+                auto alpha = operate("Read PNG alpha", [&](VipsImage** out) {
+                    return vips_extract_band(rgb.get(), out, 3, nullptr);
+                });
+                auto normalized_alpha = operate("Normalize PNG alpha", [&](VipsImage** out) {
+                    return vips_linear1(alpha.get(), out, 1.0 / maximum, 0.0, nullptr);
+                });
+                rgba = operate("Join linear PNG channels", [&](VipsImage** out) {
+                    return vips_bandjoin2(linear.get(), normalized_alpha.get(), out, nullptr);
+                });
+            }
+            return operate("Tag linear PNG colors", [&](VipsImage** out) {
+                return vips_copy(rgba ? rgba.get() : linear.get(), out,
+                    "interpretation", VIPS_INTERPRETATION_scRGB, nullptr);
+            });
+        }
+    }
+    auto srgb = operate("Convert image to sRGB", [&](VipsImage** out) {
+        if (vips_image_get_typeof(oriented, VIPS_META_ICC_NAME) != 0) {
+            return vips_icc_transform(oriented, out, "srgb", "embedded", TRUE, nullptr);
+        }
+        return vips_colourspace(oriented, out, VIPS_INTERPRETATION_sRGB, nullptr);
+    });
+    return operate("Convert image to linear light", [&](VipsImage** out) {
+        return vips_colourspace(srgb.get(), out, VIPS_INTERPRETATION_scRGB, nullptr);
+    });
+}
+
+Image rgba_image(VipsImage* linear) {
+    auto output = operate("Convert image to sRGB", [&](VipsImage** out) {
+        return vips_colourspace(linear, out, VIPS_INTERPRETATION_sRGB, nullptr);
+    });
+    Image alpha;
+    auto* rgba = output.get();
+    if (!vips_image_hasalpha(rgba)) {
+        alpha = operate("Add opaque alpha", [&](VipsImage** out) {
+            return vips_addalpha(output.get(), out, nullptr);
+        });
+        rgba = alpha.get();
+    }
+    return operate("Convert pixels to 8-bit channels", [&](VipsImage** out) {
+        return vips_cast(rgba, out, VIPS_FORMAT_UCHAR, nullptr);
     });
 }
 
@@ -249,23 +361,18 @@ void validate(const std::filesystem::path& source) {
     }
 }
 
+Image convert(const std::filesystem::path& source) {
+    auto oriented = oriented_image(source);
+    auto linear = linear_image(oriented.get(), source);
+    return rgba_image(linear.get());
+}
+
 Image resize(const std::filesystem::path& source, int width, int height, bool opaque) {
     if (width < 1 || width > 65535 || height < 1 || height > 65535) {
         throw std::invalid_argument("Output dimensions must be between 1 and 65535.");
     }
-    auto loaded = load(source);
-    auto oriented = operate("Apply image orientation", [&](VipsImage** out) {
-        return vips_autorot(loaded.get(), out, nullptr);
-    });
-    auto srgb = operate("Convert image to sRGB", [&](VipsImage** out) {
-        if (vips_image_get_typeof(oriented.get(), "icc-profile-data") != 0) {
-            return vips_icc_transform(oriented.get(), out, "srgb", "embedded", TRUE, nullptr);
-        }
-        return vips_colourspace(oriented.get(), out, VIPS_INTERPRETATION_sRGB, nullptr);
-    });
-    auto linear = operate("Convert image to linear light", [&](VipsImage** out) {
-        return vips_colourspace(srgb.get(), out, VIPS_INTERPRETATION_scRGB, nullptr);
-    });
+    auto oriented = oriented_image(source);
+    auto linear = linear_image(oriented.get(), source);
     const bool has_alpha = vips_image_hasalpha(linear.get()) != 0;
     Image adjusted;
     auto* filter_input = linear.get();
@@ -293,28 +400,28 @@ Image resize(const std::filesystem::path& source, int width, int height, bool op
     Image straightened;
     auto* straight = resized.get();
     if (!opaque && has_alpha) {
-        straightened = operate("Unpremultiply image alpha", [&](VipsImage** out) {
-            return vips_unpremultiply(resized.get(), out, "max_alpha", 1.0, nullptr);
+        // libvips uses an absolute 0.01 threshold for floating alpha. Scale only
+        // alpha to byte-scale units so valid 1/255 and 2/255 samples keep colors.
+        // A power of two avoids rounding alpha during the scale/unscale pair.
+        const double scales[]{1, 1, 1, 256};
+        const double zero[]{0, 0, 0, 0};
+        auto scaled = operate("Scale alpha for unpremultiplication", [&](VipsImage** out) {
+            return vips_linear(resized.get(), out, scales, zero, 4, nullptr);
+        });
+        auto unpremultiplied = operate("Unpremultiply image alpha", [&](VipsImage** out) {
+            return vips_unpremultiply(scaled.get(), out, "max_alpha", 256.0, nullptr);
+        });
+        const double inverse[]{1, 1, 1, 1.0 / 256.0};
+        straightened = operate("Restore normalized alpha", [&](VipsImage** out) {
+            return vips_linear(unpremultiplied.get(), out, inverse, zero, 4, nullptr);
         });
         straight = straightened.get();
     }
-    auto output = operate("Convert resized image to sRGB", [&](VipsImage** out) {
-        return vips_colourspace(straight, out, VIPS_INTERPRETATION_sRGB, nullptr);
-    });
-    Image alpha;
-    auto* rgba = output.get();
-    if (!vips_image_hasalpha(rgba)) {
-        alpha = operate("Add opaque alpha", [&](VipsImage** out) {
-            return vips_addalpha(output.get(), out, nullptr);
-        });
-        rgba = alpha.get();
-    }
-    if (vips_image_get_width(rgba) != width || vips_image_get_height(rgba) != height) {
+    auto rgba = rgba_image(straight);
+    if (vips_image_get_width(rgba.get()) != width || vips_image_get_height(rgba.get()) != height) {
         throw std::runtime_error("Image resize produced unexpected dimensions.");
     }
-    return operate("Convert pixels to 8-bit channels", [&](VipsImage** out) {
-        return vips_cast(rgba, out, VIPS_FORMAT_UCHAR, nullptr);
-    });
+    return rgba;
 }
 
 Image offset_background(VipsImage* image, int offset) {

@@ -46,6 +46,7 @@ void help() {
         "image-tools " IMAGE_TOOLS_VERSION "\n"
         "Usage:\n"
         "  image-tools validate --input PATH [--threads N]\n"
+        "  image-tools convert --input PATH --output PATH [--threads N]\n"
         "  image-tools resize --input PATH --output PATH --width N --height N [--opaque] [--threads N]\n"
         "  image-tools stage --background PATH --background-output PATH --effects-output PATH\n"
         "      [--offset N] [--effect0 PATH] [--effect1 PATH] [--effect2 PATH] [--effect3 PATH] [--threads N]\n"
@@ -141,6 +142,14 @@ int run(const std::vector<std::string>& args) {
             const auto input = image_tools::path_from_utf8(required(options, "--input"));
             image_tools::Runtime runtime("image-tools", options.threads);
             image_tools::validate(input);
+        } else if (options.command == "convert") {
+            allowed(options, {"--input", "--output"});
+            const auto input = image_tools::path_from_utf8(required(options, "--input"));
+            const auto output = image_tools::path_from_utf8(required(options, "--output"));
+            image_tools::require_new_output(output);
+            image_tools::Runtime runtime("image-tools", options.threads);
+            auto image = image_tools::convert(input);
+            image_tools::write_tga(image.get(), output);
         } else if (options.command == "resize") {
             allowed(options, {"--input", "--output", "--width", "--height"});
             const auto input = image_tools::path_from_utf8(required(options, "--input"));

@@ -32,6 +32,7 @@ void require_new_output(const std::filesystem::path& path);
 bool paths_equal(const std::filesystem::path& first, const std::filesystem::path& second);
 
 void validate(const std::filesystem::path& source);
+Image convert(const std::filesystem::path& source);
 Image resize(const std::filesystem::path& source, int width, int height, bool opaque);
 Image offset_background(VipsImage* image, int offset);
 Image effect_atlas(const std::array<std::optional<std::filesystem::path>, 4>& paths);

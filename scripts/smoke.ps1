@@ -17,6 +17,13 @@ try {
     [IO.File]::WriteAllBytes($inputFile, [Convert]::FromBase64String($png))
     & $exe validate --input $inputFile
     if ($LASTEXITCODE -ne 0) { throw 'Installed CLI validation failed.' }
+    $convertedFile = Join-Path $smokeRoot '转换.tga'
+    & $exe convert --input $inputFile --output $convertedFile
+    if ($LASTEXITCODE -ne 0) { throw 'Installed CLI conversion failed.' }
+    $converted = [IO.File]::ReadAllBytes($convertedFile)
+    if ($converted.Length -ne (18 + 2 * 2 * 4) -or $converted[12] -ne 2 -or $converted[14] -ne 2) {
+        throw 'Installed CLI conversion changed the image dimensions.'
+    }
     & $exe resize --input $inputFile --output $outputFile --width 4 --height 3 --opaque
     if ($LASTEXITCODE -ne 0) { throw 'Installed CLI resize failed.' }
     $bytes = [IO.File]::ReadAllBytes($outputFile)
